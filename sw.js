@@ -1,5 +1,5 @@
 // Bump VERSION every release (keep in sync with APP_VERSION in app.js)
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.2.1';
 const CACHE = 'family-tree-' + VERSION;
 const CORE = ['./', './index.html', './styles.css', './app.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];

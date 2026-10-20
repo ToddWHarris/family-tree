@@ -1,5 +1,6 @@
 {
   "name": "Family Tree",
+  "description": "Family tree viewer for iPhone, created by Todd W Harris.",
   "short_name": "Family Tree",
   "start_url": "./",
   "scope": "./",

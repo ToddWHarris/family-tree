@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 'v1.2.0';
+const APP_VERSION = 'v1.2.1';
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CONF = ['PROVEN','STRONG','LIKELY','POSSIBLE','UNPROVEN'];
@@ -312,6 +312,7 @@ V.settings = async () => {
   ${S.data ? '<button class="btn secondary" data-act="export">Export backup (.zip)</button>' : ''}
   <button class="btn danger" data-act="clear">Clear all data</button></div>
   <div class="card small"><b>Important:</b> your family data is stored only inside this app on this iPhone. If you delete the app from your Home Screen (or clear Safari website data), the data is erased. Keep the original data file (or an exported backup) somewhere safe, like the Files app or iCloud Drive.</div>
+  <div class="card about" id="about"><h3 style="margin-top:0">About</h3><p><b>Family Tree</b><br>Created by Todd W Harris, Hamler, Ohio<br>Version ${APP_VERSION}<br>© 2026 Todd W Harris</p><p class="small muted">Your family data stays on this device. It is not part of the app and is never uploaded.</p></div>
   <div class="card"><b>Version</b> <span class="version" id="ver">${APP_VERSION}</span><p class="small muted">The app checks for updates each time it opens.</p><button class="btn secondary" data-act="update">Check for update now</button></div>`;
 };
 V.settings.after = () => {
