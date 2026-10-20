@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 'v1.0.0';
+const APP_VERSION = 'v1.1.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CONF = ['PROVEN','STRONG','LIKELY','POSSIBLE','UNPROVEN'];
@@ -73,7 +73,7 @@ async function importFile(file) {
 /* ---------- state ---------- */
 const S = { data: null, P: {}, settings: { showLiving: false, fontScale: 1 }, urls: {}, imgKeys: new Set() };
 function index(data) {
-  S.data = data; S.P = {};
+  S.data = data; S._lines = null; S.trail = []; S.trailPos = -1; S.P = {};
   for (const p of data.people) S.P[p.id] = p;
   S.src = {}; for (const s of (data.sources || [])) S.src[s.id] = s;
   S.photoMeta = {}; for (const ph of (data.photos || [])) S.photoMeta[ph.file] = ph;
@@ -149,7 +149,7 @@ V.home = () => {
   <input type="search" id="homeSearch" placeholder="Search names, places, years…" enterkeyhint="search">
   ${prow(r, '<span class="muted small">(you)</span>')}
   <div class="chips" style="margin:12px 0">
-    <a class="chip" href="#/pedigree/${encodeURIComponent(r.id)}">&#9783; Pedigree chart</a>
+    <a class="chip" href="#/tree/${encodeURIComponent(r.id)}">&#127795; Family tree</a><a class="chip" href="#/pedigree/${encodeURIComponent(r.id)}">&#9783; Pedigree chart</a>
     <a class="chip" href="#/family/${encodeURIComponent(r.id)}">&#128106; Family view</a>
     <a class="chip" href="#/research">&#10067; Research (${open})</a>
     <a class="chip" href="#/photos">&#128247; Photos</a>
@@ -204,8 +204,8 @@ V.person = id => {
     ${!hid && p.nickname ? `<div class="sub">“${esc(p.nickname)}”</div>` : ''}
     ${!hid && (p.altNames || []).length ? `<div class="alt">Also: ${p.altNames.map(esc).join(' · ')}</div>` : ''}
     ${!hid && p.maiden ? `<div class="alt">Maiden name: ${esc(p.maiden)}</div>` : ''}
-    <div class="sub">${esc(years(p))}</div>${!hid && p.confidence ? `<div style="margin-top:6px">${badge(p.confidence)}</div>` : ''}</div>`;
-  const rel = `<div class="chips"><a class="chip" href="#/family/${encodeURIComponent(p.id)}">&#128106; Family</a><a class="chip" href="#/pedigree/${encodeURIComponent(p.id)}">&#9783; Pedigree</a><a class="chip" href="#/descendants/${encodeURIComponent(p.id)}">&#8615; Descendants</a></div>`;
+    <div class="sub">${esc(years(p))}</div>${S.data && relLabel(p) ? `<div class="trel">${esc(relLabel(p))}</div>` : ''}${!hid && p.confidence ? `<div style="margin-top:6px">${badge(p.confidence)}</div>` : ''}</div>`;
+  const rel = `<div class="chips"><a class="chip" href="#/tree/${encodeURIComponent(p.id)}">&#127795; Tree</a><a class="chip" href="#/family/${encodeURIComponent(p.id)}">&#128106; Family</a><a class="chip" href="#/pedigree/${encodeURIComponent(p.id)}">&#9783; Pedigree</a><a class="chip" href="#/descendants/${encodeURIComponent(p.id)}">&#8615; Descendants</a></div>`;
   const quick = `<h3>Parents ${p.parentConfidence && (p.parents || []).length ? badge(p.parentConfidence) : ''}</h3>${parentsOf(p).map(x => prow(x)).join('') || '<p class="muted">Not recorded</p>'}`;
   const cand = (p.candidateParents || []).length ? `<div class="card"><h3 style="margin-top:0">Possible parents (research)</h3>${p.candidateParents.map(c =>
     `<div style="margin:10px 0">${badge(c.confidence)} ${c.ids.map(i => S.P[i]).filter(Boolean).map(q => `<a href="#/person/${encodeURIComponent(q.id)}">${esc(q.name)}</a>`).join(' &amp; ')}<div class="small muted">${esc(c.note)}</div></div>`).join('')}</div>` : '';
@@ -354,15 +354,202 @@ let tx0 = null;
 $('#viewerImgWrap').addEventListener('touchstart', e => { tx0 = e.touches.length === 1 ? e.touches[0].clientX : null; }, {passive: true});
 $('#viewerImgWrap').addEventListener('touchend', e => { if (tx0 == null) return; const dx = e.changedTouches[0].clientX - tx0; if (Math.abs(dx) > 60) (dx < 0 ? $('#vNext') : $('#vPrev')).click(); tx0 = null; });
 
+/* ---------- relationship to root ---------- */
+function ancDepths(id) {
+  const d = new Map([[id, 0]]), q = [id];
+  while (q.length) { const x = q.shift(); const p = S.P[x]; if (!p) continue;
+    for (const par of p.parents || []) if (!d.has(par) && S.P[par]) { d.set(par, d.get(x) + 1); q.push(par); } }
+  return d;
+}
+const ord = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+const greats = n => n <= 0 ? '' : n === 1 ? 'great-' : ord(n) + ' great-';
+function sx(p, m, f, u) { return p.sex === 'M' ? m : p.sex === 'F' ? f : u; }
+function bloodRel(rootId, p) {
+  if (p.id === rootId) return 'You';
+  const A = ancDepths(rootId), B = ancDepths(p.id);
+  let best = null;
+  for (const [id, dt] of B) if (A.has(id)) { const dr = A.get(id); if (!best || dr + dt < best[0] + best[1]) best = [dr, dt]; }
+  if (!best) return '';
+  const [dr, dt] = best;
+  if (dt === 0) return dr === 1 ? sx(p, 'father', 'mother', 'parent') : dr === 2 ? sx(p, 'grandfather', 'grandmother', 'grandparent') : greats(dr - 2) + sx(p, 'grandfather', 'grandmother', 'grandparent');
+  if (dr === 0) return dt === 1 ? sx(p, 'son', 'daughter', 'child') : dt === 2 ? sx(p, 'grandson', 'granddaughter', 'grandchild') : greats(dt - 2) + sx(p, 'grandson', 'granddaughter', 'grandchild');
+  if (dr === 1 && dt === 1) return sx(p, 'brother', 'sister', 'sibling');
+  if (dr === 1) return (dt === 2 ? '' : dt === 3 ? 'grand-' : greats(dt - 3) + 'grand-') + sx(p, 'nephew', 'niece', 'niece/nephew');
+  if (dt === 1) return (dr === 2 ? '' : dr === 3 ? 'great-' : greats(dr - 2)) + sx(p, 'uncle', 'aunt', 'aunt/uncle');
+  const deg = Math.min(dr, dt) - 1, rem = Math.abs(dr - dt);
+  return ord(deg) + ' cousin' + (rem ? ' ' + (rem === 1 ? 'once' : rem === 2 ? 'twice' : rem + ' times') + ' removed' : '');
+}
+function relLabel(p) {
+  const root = S.data.rootPersonId; const r = bloodRel(root, p);
+  if (r === 'You') return 'You';
+  if (r) return 'Your ' + r;
+  for (const s of p.spouses || []) { const q = S.P[s.id]; if (!q) continue; const r2 = bloodRel(root, q);
+    if (r2) return r2 === 'You' ? 'Your ' + sx(p, 'husband', 'wife', 'spouse') : `Spouse of your ${r2}`; }
+  return '';
+}
+function lineOf(id) {
+  const root = S.P[S.data.rootPersonId]; if (!root) return '';
+  if (!S._lines) { S._lines = {}; const f = father(root), m = mother(root);
+    if (f) for (const k of ancDepths(f.id).keys()) S._lines[k] = 'pat';
+    if (m) for (const k of ancDepths(m.id).keys()) if (!S._lines[k]) S._lines[k] = 'mat'; }
+  return S._lines[id] || '';
+}
+
+/* ---------- Tree (person-centred) ---------- */
+S.trail = []; S.trailPos = -1; S.showSibs = false;
+function tcard(p, role, linkConf) {
+  if (!p) return '';
+  const hid = hidden(p);
+  const ph = !hid && (p.photos || []).find(f => S.imgKeys.has(f));
+  const lc = linkConf && linkConf !== 'PROVEN' ? badge(linkConf) : '';
+  return `<div class="tc ${esc(p.sex)} ${lineOf(p.id)} tc-${role}" data-id="${esc(p.id)}" role="button" tabindex="0">
+    <span class="tav" ${ph ? `data-img="${esc(ph)}"` : ''}>${esc(initials(p))}</span>
+    <span class="tct"><b>${esc(p.name)}</b><span class="yr">${esc(years(p))}</span>${lc}</span>
+    <button class="tinfo" data-info="${esc(p.id)}" aria-label="Open details for ${esc(p.name)}">i</button></div>`;
+}
+V.tree = id => {
+  const p = S.P[id] || S.P[S.data.rootPersonId]; if (!p) return notFound();
+  if (S.trail[S.trailPos] !== p.id) { S.trail = S.trail.slice(0, S.trailPos + 1); S.trail.push(p.id); if (S.trail.length > 30) S.trail.shift(); S.trailPos = S.trail.length - 1; }
+  setTitle('Family Tree');
+  const f = father(p), m = mother(p);
+  const pars = parentsOf(p);
+  const sps = (p.spouses || []).map(s => S.P[s.id]).filter(Boolean);
+  const kids = childrenOf(p), sibs = siblingsOf(p);
+  const rl = relLabel(p);
+  const trail = S.trail.map((t, i) => S.P[t] ? `<button class="crumb ${i === S.trailPos ? 'on' : ''}" data-crumb="${i}">${esc(S.P[t].name.replace(/\s*\(.*?\)\s*/g, ' ').split(' ').filter(Boolean).slice(0, 2).join(' '))}</button>` : '').join('<span class="sep">›</span>');
+  return `<div class="tsearch"><input type="search" id="tq" placeholder="Jump to a person…" autocomplete="off" enterkeyhint="search"><div id="tqr"></div></div>
+  <div class="crumbs" id="crumbs">${trail}</div>
+  <div class="tstage" id="tstage">
+    <svg id="tlines" aria-hidden="true"></svg>
+    <div class="trow trow-par">${pars.length ? pars.map(q => tcard(q, 'par', p.parentConfidence)).join('') : '<div class="tc tc-empty">Parents not recorded</div>'}</div>
+    <div class="trow trow-focus">
+      <div class="tfocuswrap">${tcard(p, 'focus', null)}<div class="trel">${esc(rl)}${rl && p.parentConfidence && p.parentConfidence !== 'PROVEN' && pars.length ? ` · parents ${badge(p.parentConfidence)}` : ''}</div></div>
+      ${sps.length ? `<div class="tsps"><div class="tlabel">Spouse${sps.length > 1 ? 's' : ''}</div>${sps.map(q => tcard(q, 'sp')).join('')}</div>` : ''}
+    </div>
+    ${S.showSibs ? `<div class="tlabel tkl" style="margin-top:14px">${sibs.length ? `Brothers &amp; sisters (${sibs.length})` : 'No brothers or sisters recorded'}</div><div class="trow trow-kids trow-sibs">${sibs.map(q => tcard(q, 'sib')).join('')}</div>` : ''}
+    <div class="tlabel tkl">${kids.length ? `Children (${kids.length})${kids.length > 2 ? ' — swipe ›' : ''}` : 'No children recorded'}</div>
+    <div class="trow trow-kids" id="tkids">${kids.map(q => tcard(q, 'kid')).join('')}</div>
+  </div>
+  <label class="sibtoggle"><input type="checkbox" id="sibT" ${S.showSibs ? 'checked' : ''}> Show brothers &amp; sisters (${sibs.length})</label>
+  <div class="tbar">
+    <button data-tnav="back" ${S.trailPos > 0 ? '' : 'disabled'} aria-label="Back">‹<small>Back</small></button>
+    <button data-tnav="fwd" ${S.trailPos < S.trail.length - 1 ? '' : 'disabled'} aria-label="Forward">›<small>Fwd</small></button>
+    <button data-tnav="up-f" ${f ? '' : 'disabled'}>↑<small>Father</small></button>
+    <button data-tnav="up-m" ${m ? '' : 'disabled'}>↑<small>Mother</small></button>
+    <button data-tnav="home">⌂<small>${esc(((S.P[S.data.rootPersonId] || {}).name || 'Home').split(' ')[0])}</small></button>
+  </div>`;
+};
+function goTree(id, anim) { S.treeAnim = anim || 'fade'; location.hash = '#/tree/' + encodeURIComponent(id); }
+function drawLines() {
+  const st = $('#tstage'), svg = $('#tlines'); if (!st || !svg) return;
+  const R = st.getBoundingClientRect(); svg.setAttribute('width', R.width); svg.setAttribute('height', st.scrollHeight);
+  const foc = st.querySelector('.tc-focus'); if (!foc) return;
+  const box = el => { const r = el.getBoundingClientRect(); return {x: r.left - R.left + r.width / 2, t: r.top - R.top, b: r.bottom - R.top, l: r.left - R.left, r: r.right - R.left, m: r.top - R.top + r.height / 2}; };
+  const F = box(foc); let d = '';
+  const pars = [...st.querySelectorAll('.tc-par')].map(box);
+  if (pars.length) { const y = (pars[0].b + F.t) / 2; d += `M${F.x},${F.t}V${y}`; for (const P2 of pars) d += `M${P2.x},${P2.b}V${y}`; d += `M${Math.min(F.x, ...pars.map(q => q.x))},${y}H${Math.max(F.x, ...pars.map(q => q.x))}`; }
+  const kids = [...st.querySelectorAll('.tc-kid')].map(box).filter(k => k.r > 0 && k.l < R.width);
+  if (kids.length) { const y = (F.b + kids[0].t) / 2 + 6; d += `M${F.x},${F.b}V${y}`; for (const K of kids) d += `M${K.x},${y}V${K.t}`; d += `M${Math.max(0, Math.min(F.x, ...kids.map(k => k.x)))},${y}H${Math.min(R.width, Math.max(F.x, ...kids.map(k => k.x)))}`; }
+  for (const s of st.querySelectorAll('.tc-sp')) { const Sb = box(s); d += `M${F.r},${F.m}H${Sb.l}`; }
+  svg.innerHTML = `<path d="${d}" fill="none" stroke="#b9a68e" stroke-width="2.5" stroke-linecap="round"/>`;
+}
+V.tree.after = () => {
+  const st = $('#tstage');
+  st.classList.add('anim-' + (S.treeAnim || 'fade')); S.treeAnim = null;
+  requestAnimationFrame(() => requestAnimationFrame(() => st.classList.add('in')));
+  setTimeout(drawLines, 30); setTimeout(drawLines, 400);
+  $('#tkids').addEventListener('scroll', () => requestAnimationFrame(drawLines), {passive: true});
+  window.onresize = drawLines;
+  const c = $('#crumbs'); c.scrollLeft = c.scrollWidth;
+  let lp = null, lpFired = false;
+  st.addEventListener('pointerdown', e => { const card = e.target.closest('.tc[data-id]'); if (!card || e.target.closest('.tinfo')) return;
+    lpFired = false; lp = setTimeout(() => { lpFired = true; if (navigator.vibrate) navigator.vibrate(15); location.hash = '#/person/' + encodeURIComponent(card.dataset.id); }, 550); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => st.addEventListener(t, () => clearTimeout(lp)));
+  st.addEventListener('scroll', () => clearTimeout(lp), true);
+  st.addEventListener('contextmenu', e => e.preventDefault());
+  st.addEventListener('click', e => {
+    const info = e.target.closest('.tinfo'); if (info) { e.stopPropagation(); location.hash = '#/person/' + encodeURIComponent(info.dataset.info); return; }
+    const card = e.target.closest('.tc[data-id]'); if (!card || lpFired) return;
+    const role = [...card.classList].find(k => k.startsWith('tc-'));
+    if (role === 'tc-focus') { location.hash = '#/person/' + encodeURIComponent(card.dataset.id); return; }
+    card.classList.add('tapped');
+    setTimeout(() => goTree(card.dataset.id, role === 'tc-par' ? 'down' : role === 'tc-kid' ? 'up' : 'side'), 120);
+  });
+  c.onclick = e => { const b = e.target.closest('[data-crumb]'); if (!b) return; S.trailPos = +b.dataset.crumb; goTree(S.trail[S.trailPos], 'fade'); };
+  document.querySelector('.tbar').onclick = e => {
+    const b = e.target.closest('[data-tnav]'); if (!b || b.disabled) return; const p = S.P[S.trail[S.trailPos]];
+    const a = b.dataset.tnav;
+    if (a === 'back') { S.trailPos--; goTree(S.trail[S.trailPos], 'side'); }
+    if (a === 'fwd') { S.trailPos++; goTree(S.trail[S.trailPos], 'side'); }
+    if (a === 'up-f' && father(p)) goTree(father(p).id, 'down');
+    if (a === 'up-m' && mother(p)) goTree(mother(p).id, 'down');
+    if (a === 'home') goTree(S.data.rootPersonId, 'fade');
+  };
+  $('#sibT').onchange = e => { S.showSibs = e.target.checked; S.noScroll = true; route().then(() => S.noScroll = false); };
+  const q = $('#tq'), out = $('#tqr'); let t;
+  q.oninput = () => { clearTimeout(t); t = setTimeout(() => {
+    const v = q.value.trim().toLowerCase(); if (v.length < 2) { out.innerHTML = ''; return; }
+    const terms = v.split(/\s+/);
+    const hits = S.data.people.filter(p => { const s = [p.name, p.maiden, p.nickname, ...(p.altNames || [])].join(' ').toLowerCase(); return terms.every(x => s.includes(x)); })
+      .sort((a, b) => (b.curated ? 1 : 0) - (a.curated ? 1 : 0) || a.name.localeCompare(b.name)).slice(0, 8);
+    out.innerHTML = hits.map(p => `<button class="tqhit" data-jump="${esc(p.id)}"><b>${esc(p.name)}</b> <span class="muted small">${esc(years(p))}</span></button>`).join('') || '<div class="muted small" style="padding:8px">No match</div>';
+  }, 150); };
+  out.onclick = e => { const b = e.target.closest('[data-jump]'); if (b) goTree(b.dataset.jump, 'fade'); };
+};
+
+/* ---------- zoomable pedigree ---------- */
+S.pedZoom = 1;
+V.pedigree = id => {
+  const root = S.P[id] || S.P[S.data.rootPersonId];
+  setTitle('Pedigree');
+  const G = 5; const gens = [[root]];
+  for (let g = 1; g < G; g++) gens.push(gens[g - 1].flatMap(p => p ? [father(p), mother(p)] : [null, null]));
+  const box = (p, g, i) => {
+    if (!p) return `<div class="slot"><span class="pbox empty">${g ? (i % 2 ? 'Mother' : 'Father') + ' unknown' : ''}</span></div>`;
+    const kid = g > 0 ? gens[g - 1][i >> 1] : null;
+    const lc = kid && kid.parentConfidence && kid.parentConfidence !== 'PROVEN' ? badge(kid.parentConfidence) : '';
+    return `<div class="slot"><a class="pbox ${esc(p.sex)} ${lineOf(p.id)} ${g ? '' : 'root'}" href="#/pedigree/${encodeURIComponent(p.id)}" data-pid="${esc(p.id)}"><b>${esc(p.name)}</b><span class="yr">${esc(years(p))}</span>${lc ? '<br>' + lc : ''}</a></div>`;
+  };
+  const H = 2 ** (G - 1) * 76;
+  return `<div class="pedctl"><button data-z="-">−</button><button data-z="0">Fit</button><button data-z="+">+</button>
+    <a class="chip" href="#/tree/${encodeURIComponent(root.id)}">Open in Tree</a></div>
+  <div class="pedwrap" id="pedwrap"><div class="pedzoom" id="pedzoom"><div class="ped" id="ped" style="height:${H}px">
+  ${gens.map((col, g) => `<div class="gen">${col.map((p, i) => box(p, g, i)).join('')}</div>`).join('')}
+  </div></div></div>
+  <p class="muted small">Pinch or use − / + to zoom; drag to move. Tap anyone to put them at the left. Badges show how sure we are of that parent link. Blue edge = father's line, rose = mother's line.</p>`;
+};
+V.pedigree.after = () => {
+  const wrap = $('#pedwrap'), z = $('#pedzoom'), ped = $('#ped');
+  const W = ped.scrollWidth, H = ped.scrollHeight;
+  const set = (s, cx, cy) => {
+    s = Math.max(0.3, Math.min(2, s)); const old = S.pedZoom;
+    cx = cx == null ? wrap.clientWidth / 2 : cx; cy = cy == null ? wrap.clientHeight / 2 : cy;
+    const ax = (wrap.scrollLeft + cx) / old, ay = (wrap.scrollTop + cy) / old;
+    S.pedZoom = s; ped.style.transform = `scale(${s})`; z.style.width = W * s + 'px'; z.style.height = H * s + 'px';
+    wrap.scrollLeft = ax * s - cx; wrap.scrollTop = ay * s - cy;
+  };
+  const fit = () => set(Math.min(wrap.clientWidth / W, wrap.clientHeight / H));
+  set(S.pedZoom === 1 && !S.pedVisited ? Math.min(1, wrap.clientWidth / W, wrap.clientHeight / H) : S.pedZoom); S.pedVisited = true;
+  document.querySelector('.pedctl').onclick = e => { const b = e.target.closest('[data-z]'); if (!b) return;
+    b.dataset.z === '0' ? fit() : set(S.pedZoom * (b.dataset.z === '+' ? 1.25 : 0.8)); };
+  let p0 = null;
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  wrap.addEventListener('touchstart', e => { if (e.touches.length === 2) { const r = wrap.getBoundingClientRect(); p0 = {d: dist(e.touches), s: S.pedZoom, cx: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left, cy: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top}; } }, {passive: true});
+  wrap.addEventListener('touchmove', e => { if (p0 && e.touches.length === 2) { e.preventDefault(); set(p0.s * dist(e.touches) / p0.d, p0.cx, p0.cy); } }, {passive: false});
+  wrap.addEventListener('touchend', e => { if (e.touches.length < 2) p0 = null; });
+  wrap.addEventListener('gesturestart', e => e.preventDefault());
+  wrap.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); const r = wrap.getBoundingClientRect(); set(S.pedZoom * (e.deltaY < 0 ? 1.1 : 0.9), e.clientX - r.left, e.clientY - r.top); } }, {passive: false});
+};
+
 /* ---------- router ---------- */
 function notFound() { setTitle('Not found'); return '<p>That person was not found. <a href="#/home">Go home</a></p>'; }
 async function route() {
   closeViewer();
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, '')); const [name, ...rest] = h.split('/'); const arg = rest.join('/');
-  let v = name || 'home';
+  let v = name || 'tree';
   if (!S.data && v !== 'settings') v = 'welcome';
   if (!V[v]) v = 'home';
-  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === v || (v === 'pedigree' && a.dataset.tab === 'pedigree')));
+  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.tab === v));
   $('#tabs').style.display = S.data ? '' : 'none';
   $('#view').innerHTML = await V[v](arg);
   if (V[v].after) V[v].after(arg);
@@ -391,7 +578,7 @@ $('#fileInput').onchange = async e => {
     const d = await importFile(f); Object.values(S.urls).forEach(u => URL.revokeObjectURL(u)); S.urls = {};
     index(d); S.imgKeys = new Set(await DB.keys('images'));
     alert(`Imported ${d.people.length} people and ${S.imgKeys.size} photos.`);
-    location.hash = '#/home'; route();
+    location.hash = '#/tree'; route();
   } catch (err) { alert('Import failed: ' + err.message); route(); }
 };
 
