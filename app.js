@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 'v1.1.0';
+const APP_VERSION = 'v1.2.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CONF = ['PROVEN','STRONG','LIKELY','POSSIBLE','UNPROVEN'];
@@ -73,7 +73,7 @@ async function importFile(file) {
 /* ---------- state ---------- */
 const S = { data: null, P: {}, settings: { showLiving: false, fontScale: 1 }, urls: {}, imgKeys: new Set() };
 function index(data) {
-  S.data = data; S._lines = null; S.trail = []; S.trailPos = -1; S.P = {};
+  S.data = data; S._lines = null; S._dist = null; S.trail = []; S.trailPos = -1; S.P = {};
   for (const p of data.people) S.P[p.id] = p;
   S.src = {}; for (const s of (data.sources || [])) S.src[s.id] = s;
   S.photoMeta = {}; for (const ph of (data.photos || [])) S.photoMeta[ph.file] = ph;
@@ -102,6 +102,13 @@ function years(p) {
   if (!b && !d) return p.isLiving ? 'Living' : '';
   return (b || '?') + ' – ' + (d || (p.isLiving ? '' : '?'));
 }
+const STATUS = {
+  'VERIFIED': {i: '✓', c: 'st-ver', h: '2 or more independent original records agree on who this is and on the parent link.'},
+  'SUPPORTED': {i: '◐', c: 'st-sup', h: 'One record, or strong indirect evidence. Not fully proven yet.'},
+  'LEAD': {i: '?', c: 'st-lead', h: 'A hypothesis we are testing. Treat with caution.'},
+  'TREE ONLY': {i: '–', c: 'st-tree', h: 'Copied from the Ancestry tree. No record has been checked by us.'}};
+const ST_ORDER = ['VERIFIED', 'SUPPORTED', 'LEAD', 'TREE ONLY'];
+const sbadge = (st, label = true) => st && STATUS[st] ? `<span class="sb ${STATUS[st].c}" title="${esc(st + ': ' + STATUS[st].h)}"><span class="sbi">${STATUS[st].i}</span>${label ? `<span class="sbl">${esc(st)}</span>` : ''}</span>` : '';
 const badge = c => c ? `<span class="badge b-${esc(c)}" title="${esc(CONF_HELP[c] || '')}">${esc(c)}</span>` : '';
 const initials = p => (p.name || '?').replace(/["(].*?[")]/g, '').split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase();
 function prow(p, extra = '') {
@@ -109,7 +116,7 @@ function prow(p, extra = '') {
   const ph = !hidden(p) && (p.photos || []).find(f => S.imgKeys.has(f));
   return `<a class="prow ${esc(p.sex)}" href="#/person/${encodeURIComponent(p.id)}">
     <span class="av" ${ph ? `data-img="${esc(ph)}"` : ''}>${esc(initials(p))}</span>
-    <span><span class="nm">${esc(p.name)}</span> ${extra}<br><span class="yr">${esc(years(p))}</span></span><span class="chev">&#8250;</span></a>`;
+    <span><span class="nm">${esc(p.name)}</span> ${sbadge(p.status)} ${extra}<br><span class="yr">${esc(years(p))}</span></span><span class="chev">&#8250;</span></a>`;
 }
 const parentsOf = p => (p.parents || []).map(i => S.P[i]).filter(Boolean);
 const childrenOf = p => (p.children || []).map(i => S.P[i]).filter(Boolean).sort((a, b) => (yearOf((ev(a, 'Birth') || {}).date) || 9999) - (yearOf((ev(b, 'Birth') || {}).date) || 9999));
@@ -157,7 +164,8 @@ V.home = () => {
   <h2>Parents</h2>${[f, m].filter(Boolean).map(p => prow(p)).join('') || '<p class="muted">None recorded</p>'}
   <h2>Grandparents</h2>${[f, m].filter(Boolean).flatMap(p => parentsOf(p)).map(p => prow(p)).join('') || '<p class="muted">None recorded</p>'}
   <h2>Earliest paternal-line ancestor</h2>${(() => { let p = r; while (father(p)) p = father(p); return p !== r ? `<a class="btn secondary" href="#/descendants/${encodeURIComponent(p.id)}">Descendants of ${esc(p.name)}</a>` : ''; })()}
-  <h2>Confidence labels</h2><div class="card">${CONF.map(c => `<div style="margin:6px 0">${badge(c)} <span class="small">${esc(CONF_HELP[c])}</span></div>`).join('')}</div>`;
+  <h2>How much is verified? <button class="qbtn" data-act="legend" aria-label="Legend">?</button></h2><div class="card">${ST_ORDER.map(k => `<div class="cntrow">${sbadge(k)}<b>${S.data.people.filter(p => (p.status || 'TREE ONLY') === k).length}</b></div>`).join('')}<p class="small muted">Out of ${S.data.people.length} people.</p></div>
+  <h2>Fact confidence labels</h2><div class="card">${CONF.map(c => `<div style="margin:6px 0">${badge(c)} <span class="small">${esc(CONF_HELP[c])}</span></div>`).join('')}</div>`;
 };
 
 V.pedigree = id => {
@@ -204,7 +212,7 @@ V.person = id => {
     ${!hid && p.nickname ? `<div class="sub">“${esc(p.nickname)}”</div>` : ''}
     ${!hid && (p.altNames || []).length ? `<div class="alt">Also: ${p.altNames.map(esc).join(' · ')}</div>` : ''}
     ${!hid && p.maiden ? `<div class="alt">Maiden name: ${esc(p.maiden)}</div>` : ''}
-    <div class="sub">${esc(years(p))}</div>${S.data && relLabel(p) ? `<div class="trel">${esc(relLabel(p))}</div>` : ''}${!hid && p.confidence ? `<div style="margin-top:6px">${badge(p.confidence)}</div>` : ''}</div>`;
+    <div class="sub">${esc(years(p))}</div>${S.data && relLabel(p) ? `<div class="trel">${esc(relLabel(p))}</div>` : ''}<div style="margin-top:8px">${sbadge(p.status)} <button class="qbtn" data-act="legend" aria-label="What do these labels mean?">?</button></div></div>`;
   const rel = `<div class="chips"><a class="chip" href="#/tree/${encodeURIComponent(p.id)}">&#127795; Tree</a><a class="chip" href="#/family/${encodeURIComponent(p.id)}">&#128106; Family</a><a class="chip" href="#/pedigree/${encodeURIComponent(p.id)}">&#9783; Pedigree</a><a class="chip" href="#/descendants/${encodeURIComponent(p.id)}">&#8615; Descendants</a></div>`;
   const quick = `<h3>Parents ${p.parentConfidence && (p.parents || []).length ? badge(p.parentConfidence) : ''}</h3>${parentsOf(p).map(x => prow(x)).join('') || '<p class="muted">Not recorded</p>'}`;
   const cand = (p.candidateParents || []).length ? `<div class="card"><h3 style="margin-top:0">Possible parents (research)</h3>${p.candidateParents.map(c =>
@@ -224,6 +232,7 @@ V.person = id => {
     ${photos.length ? `<h2>Photos &amp; records</h2><div class="photos">${photos.map((f, i) => `<img data-img="${esc(f)}" data-photo="${i}" alt="${esc((S.photoMeta[f] || {}).caption || '')}">`).join('')}</div>` : ''}
     ${p.notes ? `<h2>Notes</h2><div class="card notes">${esc(p.notes)}</div>` : ''}
     <h2>Timeline</h2><div class="timeline">${tl.map(e => `<div class="ti"><b>${esc(e.date || '?')}</b> · ${esc(e.type)} ${badge(e.confidence)}<div class="small">${esc(e.place || '')}</div></div>`).join('') || '<p class="muted">No facts</p>'}</div>
+    ${whyHTML(p)}
     <h2>Sources</h2><div class="card">${sids.map(i => S.src[i]).filter(Boolean).map(s => `<div class="srcitem"><b>${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)}</b>${s.citation ? `<div class="muted small">${esc(s.citation)}</div>` : ''}</div>`).join('') || '<p class="muted">No sources</p>'}</div>`;
 };
 V.person.after = (id) => {
@@ -264,6 +273,8 @@ V.research = () => {
   const mary = S.data.people.find(p => (p.candidateParents || []).length);
   return `<p class="muted">Open questions in the family research. Tap a question to read more.</p>
   ${mary ? `<a class="btn secondary" href="#/person/${encodeURIComponent(mary.id)}">Possible parents of ${esc(mary.name)}</a>` : ''}
+  <h2>Needs proof — closest relatives first</h2>${needsProof()}
+  <h2>Open questions</h2>
   ${(S.data.research || []).map((r, i) => `<details class="card" ${i === 0 ? 'open' : ''}><summary>${esc(r.title)}</summary><div class="status">${esc(r.status || '')}</div><div class="notes">${linkify(r.body)}</div></details>`).join('') || '<p class="muted">No research notes.</p>'}`;
 };
 function linkify(t) { return esc(t).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>'); }
@@ -401,10 +412,10 @@ function tcard(p, role, linkConf) {
   if (!p) return '';
   const hid = hidden(p);
   const ph = !hid && (p.photos || []).find(f => S.imgKeys.has(f));
-  const lc = linkConf && linkConf !== 'PROVEN' ? badge(linkConf) : '';
+  const lc = linkConf && linkConf !== 'VERIFIED' ? `<span class="lnk">link ${sbadge(linkConf)}</span>` : '';
   return `<div class="tc ${esc(p.sex)} ${lineOf(p.id)} tc-${role}" data-id="${esc(p.id)}" role="button" tabindex="0">
     <span class="tav" ${ph ? `data-img="${esc(ph)}"` : ''}>${esc(initials(p))}</span>
-    <span class="tct"><b>${esc(p.name)}</b><span class="yr">${esc(years(p))}</span>${lc}</span>
+    <span class="tct"><b>${esc(p.name)}</b><span class="yr">${esc(years(p))}</span>${sbadge(p.status)}${lc}</span>
     <button class="tinfo" data-info="${esc(p.id)}" aria-label="Open details for ${esc(p.name)}">i</button></div>`;
 }
 V.tree = id => {
@@ -412,18 +423,22 @@ V.tree = id => {
   if (S.trail[S.trailPos] !== p.id) { S.trail = S.trail.slice(0, S.trailPos + 1); S.trail.push(p.id); if (S.trail.length > 30) S.trail.shift(); S.trailPos = S.trail.length - 1; }
   setTitle('Family Tree');
   const f = father(p), m = mother(p);
-  const pars = parentsOf(p);
-  const sps = (p.spouses || []).map(s => S.P[s.id]).filter(Boolean);
-  const kids = childrenOf(p), sibs = siblingsOf(p);
+  const keep = q => { const f = S.settings.treeFilter || 'all'; if (f === 'all') return true; const r = ST_ORDER.indexOf(q.status || 'TREE ONLY'); return f === 'ver' ? r === 0 : r <= 1; };
+  let nHidden = 0; const flt = arr => { const o = arr.filter(keep); nHidden += arr.length - o.length; return o; };
+  const pars = flt(parentsOf(p));
+  const sps = flt((p.spouses || []).map(s => S.P[s.id]).filter(Boolean));
+  const kids = flt(childrenOf(p)), sibs = flt(siblingsOf(p));
   const rl = relLabel(p);
   const trail = S.trail.map((t, i) => S.P[t] ? `<button class="crumb ${i === S.trailPos ? 'on' : ''}" data-crumb="${i}">${esc(S.P[t].name.replace(/\s*\(.*?\)\s*/g, ' ').split(' ').filter(Boolean).slice(0, 2).join(' '))}</button>` : '').join('<span class="sep">›</span>');
   return `<div class="tsearch"><input type="search" id="tq" placeholder="Jump to a person…" autocomplete="off" enterkeyhint="search"><div id="tqr"></div></div>
   <div class="crumbs" id="crumbs">${trail}</div>
+  <div class="tfilter"><div class="seg">${[['all', 'All'], ['sup', '✓ ◐ Supported+'], ['ver', '✓ Verified only']].map(([k, l]) => `<button data-tf="${k}" class="${(S.settings.treeFilter || 'all') === k ? 'on' : ''}">${l}</button>`).join('')}</div><button class="qbtn" data-act="legend" aria-label="Legend">?</button></div>
+  ${nHidden ? `<div class="small muted" style="margin-bottom:6px">${nHidden} relative${nHidden > 1 ? 's' : ''} hidden by the filter.</div>` : ''}
   <div class="tstage" id="tstage">
     <svg id="tlines" aria-hidden="true"></svg>
-    <div class="trow trow-par">${pars.length ? pars.map(q => tcard(q, 'par', p.parentConfidence)).join('') : '<div class="tc tc-empty">Parents not recorded</div>'}</div>
+    <div class="trow trow-par">${pars.length ? pars.map(q => tcard(q, 'par', p.parentStatus)).join('') : `<div class="tc tc-empty">${parentsOf(p).length ? 'Parents hidden by filter' : 'Parents not recorded'}</div>`}</div>
     <div class="trow trow-focus">
-      <div class="tfocuswrap">${tcard(p, 'focus', null)}<div class="trel">${esc(rl)}${rl && p.parentConfidence && p.parentConfidence !== 'PROVEN' && pars.length ? ` · parents ${badge(p.parentConfidence)}` : ''}</div></div>
+      <div class="tfocuswrap">${tcard(p, 'focus', null)}<div class="trel">${esc(rl)}${p.parentStatus && pars.length ? `<div class="small">Parent link: ${sbadge(p.parentStatus)}</div>` : ''}</div></div>
       ${sps.length ? `<div class="tsps"><div class="tlabel">Spouse${sps.length > 1 ? 's' : ''}</div>${sps.map(q => tcard(q, 'sp')).join('')}</div>` : ''}
     </div>
     ${S.showSibs ? `<div class="tlabel tkl" style="margin-top:14px">${sibs.length ? `Brothers &amp; sisters (${sibs.length})` : 'No brothers or sisters recorded'}</div><div class="trow trow-kids trow-sibs">${sibs.map(q => tcard(q, 'sib')).join('')}</div>` : ''}
@@ -485,6 +500,7 @@ V.tree.after = () => {
     if (a === 'up-m' && mother(p)) goTree(mother(p).id, 'down');
     if (a === 'home') goTree(S.data.rootPersonId, 'fade');
   };
+  document.querySelector('.tfilter .seg').onclick = async e => { const b = e.target.closest('[data-tf]'); if (!b) return; S.settings.treeFilter = b.dataset.tf; await DB.put('kv', 'settings', S.settings); S.noScroll = true; await route(); S.noScroll = false; };
   $('#sibT').onchange = e => { S.showSibs = e.target.checked; S.noScroll = true; route().then(() => S.noScroll = false); };
   const q = $('#tq'), out = $('#tqr'); let t;
   q.oninput = () => { clearTimeout(t); t = setTimeout(() => {
@@ -507,16 +523,16 @@ V.pedigree = id => {
   const box = (p, g, i) => {
     if (!p) return `<div class="slot"><span class="pbox empty">${g ? (i % 2 ? 'Mother' : 'Father') + ' unknown' : ''}</span></div>`;
     const kid = g > 0 ? gens[g - 1][i >> 1] : null;
-    const lc = kid && kid.parentConfidence && kid.parentConfidence !== 'PROVEN' ? badge(kid.parentConfidence) : '';
+    const lc = sbadge(p.status);
     return `<div class="slot"><a class="pbox ${esc(p.sex)} ${lineOf(p.id)} ${g ? '' : 'root'}" href="#/pedigree/${encodeURIComponent(p.id)}" data-pid="${esc(p.id)}"><b>${esc(p.name)}</b><span class="yr">${esc(years(p))}</span>${lc ? '<br>' + lc : ''}</a></div>`;
   };
   const H = 2 ** (G - 1) * 76;
   return `<div class="pedctl"><button data-z="-">−</button><button data-z="0">Fit</button><button data-z="+">+</button>
-    <a class="chip" href="#/tree/${encodeURIComponent(root.id)}">Open in Tree</a></div>
+    <a class="chip" href="#/tree/${encodeURIComponent(root.id)}">Open in Tree</a><button class="qbtn" data-act="legend" aria-label="Legend">?</button></div>
   <div class="pedwrap" id="pedwrap"><div class="pedzoom" id="pedzoom"><div class="ped" id="ped" style="height:${H}px">
   ${gens.map((col, g) => `<div class="gen">${col.map((p, i) => box(p, g, i)).join('')}</div>`).join('')}
   </div></div></div>
-  <p class="muted small">Pinch or use − / + to zoom; drag to move. Tap anyone to put them at the left. Badges show how sure we are of that parent link. Blue edge = father's line, rose = mother's line.</p>`;
+  <p class="muted small">Pinch or use − / + to zoom; drag to move. Tap anyone to put them at the left. Badges show how well each person is verified (tap ? for the key). Blue edge = father's line, rose = mother's line.</p>`;
 };
 V.pedigree.after = () => {
   const wrap = $('#pedwrap'), z = $('#pedzoom'), ped = $('#ped');
@@ -541,6 +557,45 @@ V.pedigree.after = () => {
   wrap.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); const r = wrap.getBoundingClientRect(); set(S.pedZoom * (e.deltaY < 0 ? 1.1 : 0.9), e.clientX - r.left, e.clientY - r.top); } }, {passive: false});
 };
 
+function distances() {
+  if (S._dist) return S._dist; const d = new Map([[S.data.rootPersonId, 0]]), q = [S.data.rootPersonId];
+  while (q.length) { const x = q.shift(), p = S.P[x]; if (!p) continue;
+    for (const n of [...(p.parents || []), ...(p.children || []), ...(p.spouses || []).map(s => s.id)]) if (!d.has(n) && S.P[n]) { d.set(n, d.get(x) + 1); q.push(n); } }
+  return (S._dist = d);
+}
+function needsProof() {
+  const d = distances();
+  const list = S.data.people.filter(p => p.status === 'SUPPORTED' || p.status === 'LEAD').sort((a, b) => (d.get(a.id) ?? 99) - (d.get(b.id) ?? 99) || a.name.localeCompare(b.name));
+  return list.map(p => `<a class="card nprow" href="#/person/${encodeURIComponent(p.id)}"><div><b>${esc(p.name)}</b> ${sbadge(p.status)}</div><div class="small muted">${esc(relLabel(p) || '')}${p.parentStatus && p.parentStatus !== 'VERIFIED' ? ' · parent link ' + p.parentStatus.toLowerCase() : ''}</div>${p.nextStep ? `<div class="small"><b>What would prove it:</b> ${esc(p.nextStep)}</div>` : ''}</a>`).join('') || '<p class="muted">Nothing here.</p>';
+}
+function srcList(ids) {
+  const out = (ids || []).map(i => S.src[i]).filter(Boolean).map(s => `<li>${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>` : esc(s.title)} <span class="muted small">(${s.kind === 'record' ? 'record' : s.kind === 'index' ? 'index' : 'tree / family'})</span></li>`);
+  return out.length ? `<ul class="whysrc">${out.join('')}</ul>` : '<div class="small muted">No source cited.</div>';
+}
+function whyHTML(p) {
+  if (hidden(p)) return '';
+  const rows = [];
+  if ((p.parents || []).length) {
+    const names = parentsOf(p).map(q => esc(q.name)).join(' &amp; ');
+    const ids = [...new Set((p.events || []).filter(e => e.type === 'Birth' || e.type === 'Census').flatMap(e => e.sourceIds || []))];
+    rows.push(`<div class="whyrow"><div>${sbadge(p.parentStatus)} <b>Parents:</b> ${names}</div>${p.parentStatus === 'TREE ONLY' ? '<div class="small muted">This parent link comes from the Ancestry tree only.</div>' : `<div class="small muted">${p.parentStatus === 'VERIFIED' ? 'Named as parents in original records (see the facts below).' : p.parentStatus === 'SUPPORTED' ? 'One record or strong indirect evidence names these parents. See the facts and notes below.' : 'A working hypothesis. See the possible parents and the next step above.'}</div>`}</div>`);
+  }
+  for (const c of p.candidateParents || []) rows.push(`<div class="whyrow"><div>${sbadge(c.confidence === 'LIKELY' || c.confidence === 'POSSIBLE' ? 'LEAD' : c.confidence === 'UNPROVEN' ? 'TREE ONLY' : 'SUPPORTED')} <b>Possible parents:</b> ${c.ids.map(i => S.P[i]).filter(Boolean).map(q => esc(q.name)).join(' &amp; ')} <span class="small muted">(${esc(c.confidence)})</span></div><div class="small">${esc(c.note)}</div></div>`);
+  for (const e of p.events || []) rows.push(`<div class="whyrow"><div>${sbadge(e.status)} <b>${esc(e.type)}:</b> ${esc([e.date, e.place].filter(Boolean).join(', ') || '—')}</div>${srcList(e.sourceIds)}</div>`);
+  const next = p.nextStep && p.status !== 'VERIFIED' ? `<div class="card nextstep"><b>What would prove it:</b> ${esc(p.nextStep)}</div>` : '';
+  return `<h2>Why we think so <button class="qbtn" data-act="legend" aria-label="Legend">?</button></h2>
+  <div class="card"><div>${sbadge(p.status)} <b>Overall.</b> <span class="small">${p.status !== 'VERIFIED' && p.recordCount >= 2 ? `Identity is backed by ${p.recordCount} independent records, but the parent link is only ${esc((p.parentStatus || 'not recorded').toLowerCase())}, so this person is not yet fully verified.` : esc(STATUS[p.status || 'TREE ONLY'].h) + (p.recordCount ? ` ${p.recordCount} independent record${p.recordCount > 1 ? 's' : ''} reviewed.` : '')}</span></div></div>${next}
+  <div class="card">${rows.join('')}</div>`;
+}
+function showLegend() {
+  let el = $('#legend'); if (!el) { el = document.createElement('div'); el.id = 'legend'; document.body.appendChild(el); el.onclick = e => { if (e.target === el || e.target.closest('[data-close]')) el.hidden = true; }; }
+  el.innerHTML = `<div class="legbox" role="dialog" aria-label="Verification legend"><h2 style="margin-top:0">What the labels mean</h2>
+  ${ST_ORDER.map(k => `<div class="legrow">${sbadge(k)}<div class="small">${esc(STATUS[k].h)}</div></div>`).join('')}
+  <p class="small muted">Each person also has a status for each fact and for the link to their parents. Open a person and see “Why we think so”. Card edges: blue = father's side, rose = mother's side.</p>
+  <button class="btn" data-close>Close</button></div>`;
+  el.hidden = false;
+}
+
 /* ---------- router ---------- */
 function notFound() { setTitle('Not found'); return '<p>That person was not found. <a href="#/home">Go home</a></p>'; }
 async function route() {
@@ -564,6 +619,7 @@ document.addEventListener('click', async e => {
   const b = e.target.closest('[data-act]'); if (!b) return;
   const a = b.dataset.act;
   if (a === 'import') $('#fileInput').click();
+  if (a === 'legend') { e.preventDefault(); showLegend(); }
   if (a === 'export') exportBackup().catch(err => alert('Export failed: ' + err.message));
   if (a === 'update') { const r = await navigator.serviceWorker?.getRegistration(); if (r) await r.update(); alert('Checked for updates. If one was found, the app will reload.'); }
   if (a === 'clear' && confirm('Erase all family data and photos from this app? You can import the file again later.')) {
