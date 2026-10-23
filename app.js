@@ -1,5 +1,5 @@
 'use strict';
-const APP_VERSION = 'v1.2.1';
+const APP_VERSION = 'v1.3.0';
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CONF = ['PROVEN','STRONG','LIKELY','POSSIBLE','UNPROVEN'];
@@ -156,6 +156,7 @@ V.home = () => {
   <input type="search" id="homeSearch" placeholder="Search names, places, years…" enterkeyhint="search">
   ${prow(r, '<span class="muted small">(you)</span>')}
   <div class="chips" style="margin:12px 0">
+    <button class="chip" data-act="share" style="border:0;font:inherit;cursor:pointer">&#128228; Share</button>
     <a class="chip" href="#/tree/${encodeURIComponent(r.id)}">&#127795; Family tree</a><a class="chip" href="#/pedigree/${encodeURIComponent(r.id)}">&#9783; Pedigree chart</a>
     <a class="chip" href="#/family/${encodeURIComponent(r.id)}">&#128106; Family view</a>
     <a class="chip" href="#/research">&#10067; Research (${open})</a>
@@ -309,6 +310,7 @@ V.settings = async () => {
   <div class="card"><b>Text size</b><div class="chips">${[[0.9, 'Smaller'], [1, 'Normal'], [1.15, 'Larger'], [1.3, 'Largest']].map(([v, l]) => `<button class="chip ${S.settings.fontScale === v ? 'on' : ''}" data-font="${v}">${l}</button>`).join('')}</div></div>
   <div class="card"><b>Your data</b><p class="small muted">${S.data ? `${S.data.people.length} people, ${S.imgKeys.size} photos.<br>Imported ${at ? new Date(at).toLocaleString() : ''} from ${esc(nm || 'file')}.<br>Data generated ${esc(S.data.generated || '')}.` : 'No data imported.'}</p>
   <button class="btn" data-act="import">Re-import data file</button>
+  <button class="btn" data-act="share">&#128228; Share family tree</button>
   ${S.data ? '<button class="btn secondary" data-act="export">Export backup (.zip)</button>' : ''}
   <button class="btn danger" data-act="clear">Clear all data</button></div>
   <div class="card small"><b>Important:</b> your family data is stored only inside this app on this iPhone. If you delete the app from your Home Screen (or clear Safari website data), the data is erased. Keep the original data file (or an exported backup) somewhere safe, like the Files app or iCloud Drive.</div>
@@ -338,10 +340,36 @@ function makeZip(files) {
   const e = new DataView(new ArrayBuffer(22)); e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, cs, true); e.setUint32(16, off, true);
   return new Blob([...parts, ...cen, e.buffer], {type: 'application/zip'});
 }
-async function exportBackup() {
+async function buildZip() {
   const files = [['family-tree-data.json', new TextEncoder().encode(JSON.stringify(S.data))]];
   for (const k of await DB.keys('images')) { const b = await DB.get('images', k); files.push([k, new Uint8Array(await b.arrayBuffer())]); }
-  const blob = makeZip(files); const name = 'family-tree-backup-' + new Date().toISOString().slice(0, 10) + '.zip';
+  return makeZip(files);
+}
+const SHARE_URL = 'https://toddwharris.github.io/family-tree/';
+const SHARE_NAME = 'harris-family-data.zip';
+const SHARE_TEXT = "Here's our family tree: " + SHARE_URL + " \n\nThe attached file is " + SHARE_NAME + " with all the photos. Save it to your Files app, then open the link in Safari, go to Settings, choose Import, and select that zip file. The tree loads right in. Tip: use Safari's share button and Add to Home Screen so it works like an app. Your data stays on your phone.";
+function downloadBlob(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000); }
+async function shareTree() {
+  const base = {title: 'Family Tree', text: SHARE_TEXT, url: SHARE_URL};
+  const quiet = e => { if (e && e.name === 'AbortError') return true; throw e; };
+  if (!S.data) {
+    if (navigator.share) { try { await navigator.share(base); } catch (e) { quiet(e); } return; }
+    try { await navigator.clipboard.writeText(SHARE_TEXT); } catch (e) {}
+    alert('Sharing is not available here. The link and instructions were copied to the clipboard:\n\n' + SHARE_URL); return;
+  }
+  const blob = await buildZip(); const file = new File([blob], SHARE_NAME, {type: 'application/zip'});
+  if (navigator.share) {
+    if (navigator.canShare && navigator.canShare({files: [file]})) { try { await navigator.share({...base, files: [file]}); } catch (e) { quiet(e); } return; }
+    try { await navigator.share(base); } catch (e) { if (quiet(e)) return; }
+    downloadBlob(blob, SHARE_NAME);
+    alert('This device cannot attach files when sharing, so ' + SHARE_NAME + ' was downloaded instead. Attach it to your message so they can import it.'); return;
+  }
+  try { await navigator.clipboard.writeText(SHARE_TEXT); } catch (e) {}
+  downloadBlob(blob, SHARE_NAME);
+  alert('Sharing is not available here. The link and instructions were copied to the clipboard, and ' + SHARE_NAME + ' was downloaded. Paste the text into an email and attach the downloaded zip file.');
+}
+async function exportBackup() {
+  const blob = await buildZip(); const name = 'family-tree-backup-' + new Date().toISOString().slice(0, 10) + '.zip';
   const file = new File([blob], name, {type: 'application/zip'});
   if (navigator.canShare && navigator.canShare({files: [file]})) { try { await navigator.share({files: [file], title: 'Family tree backup'}); return; } catch (e) { if (e.name === 'AbortError') return; } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
@@ -621,6 +649,7 @@ document.addEventListener('click', async e => {
   const a = b.dataset.act;
   if (a === 'import') $('#fileInput').click();
   if (a === 'legend') { e.preventDefault(); showLegend(); }
+  if (a === 'share') shareTree().catch(err => alert('Share failed: ' + err.message));
   if (a === 'export') exportBackup().catch(err => alert('Export failed: ' + err.message));
   if (a === 'update') { const r = await navigator.serviceWorker?.getRegistration(); if (r) await r.update(); alert('Checked for updates. If one was found, the app will reload.'); }
   if (a === 'clear' && confirm('Erase all family data and photos from this app? You can import the file again later.')) {
